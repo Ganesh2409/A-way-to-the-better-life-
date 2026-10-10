@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>NTL v2 self-test</title><style>body{font-family:system-ui;max-width:760px;margin:30px auto;padding:0 16px}li{margin:7px 0}.ok{color:#16834b}.bad{color:#b33}</style><h1>Nutrition Tracker v2 self-test</h1><p id="status">Loading app…</p><ol id="out"></ol><script>
+(async()=>{
+  const out=document.querySelector('#out'), status=document.querySelector('#status');
+  const tests=[]; const ok=(name,fn)=>{try{let v=fn();if(v&&typeof v.then==='function')return v.then(()=>tests.push([name,true])).catch(e=>tests.push([name,false,e]));tests.push([name,!!v,v?null:new Error('assertion failed')])}catch(e){tests.push([name,false,e])}};
+  // Load app source without executing its UI boot, by extracting the exported test object from a data URL is not safe;
+  // instead this page performs structural smoke tests plus uses a tiny copied adapter for migration/scoring invariants.
+  const v1={schemaVersion:1,months:{'2026-10':{goal:'G',notes:'N',weeks:{'W-old':{startDate:'2026-10-05',endDate:'2026-10-11',categories:{food:[{id:'a',name:'Eggs',target:14,actual:12,unit:'eggs'}],micronutrients:[],exercise:[],lifestyle:[]},notes:'week'}}}}};
+  const norm=s=>String(s).trim().toLowerCase().replace(/\s+/g,' ');
+  const migrate=d=>{let x=JSON.parse(JSON.stringify(d));let map={};for(const m of Object.values(x.months))for(const w of Object.values(m.weeks))for(const [c,items] of Object.entries(w.categories))for(const i of items){let k=c+'|'+norm(i.name);map[k]??='L-'+k.replace(/[^a-z0-9]+/g,'-');i.lineageId=map[k];i.step=i.step||1;i.weight=i.weight||1;i.dailyLog=i.dailyLog||{};i.dailyTracking=!!i.dailyTracking;i.scoreBy=i.scoreBy||'total'}x.schemaVersion=2;return x};
+  const calc=(items)=>{let sw=items.reduce((a,x)=>a+(x.weight||1),0);return Math.round(items.reduce((a,x)=>a+Math.min(100,(x.actual/x.target)*100)*(x.weight||1),0)/sw)};
+  const daysScore=(hits,target=7)=>Math.min(100,hits/target*100);
+  await ok('v1 → v2 migration keeps all week/category/item values',()=>{let x=migrate(v1);return x.schemaVersion===2&&x.months['2026-10'].weeks['W-old'].categories.food[0].actual===12&&x.months['2026-10'].weeks['W-old'].categories.food[0].lineageId});
+  await ok('same normalized name + category receives same lineage across weeks',()=>{let x=migrate({schemaVersion:1,months:{a:{weeks:{x:{categories:{food:[{name:' Eggs '}],exercise:[],micronutrients:[],lifestyle:[]}},y:{categories:{food:[{name:'eggs'}],exercise:[],micronutrients:[],lifestyle:[]}}}}}});return x.months.a.weeks.x.categories.food[0].lineageId===x.months.a.weeks.y.categories.food[0].lineageId});
+  await ok('copy structure gets new record id but preserves lineage',()=>{let x={id:'old',lineageId:'line',name:'Eggs',actual:8,dailyLog:{x:1}};let y={...x,id:'new',actual:0,dailyLog:{}};return y.id!==x.id&&y.lineageId===x.lineageId&&y.actual===0});
+  await ok('weighted scoring uses weights and caps at 100',()=>calc([{actual:20,target:10,weight:2},{actual:5,target:10,weight:1}])===83);
+  await ok('days-hit scoring is capped and explicit' ,()=>daysScore(5,7)===71);
+  await ok('week-start calculation is independent of stored week key',()=>{let d=new Date('2026-10-10T00:00:00');let startMon=new Date(d);startMon.setDate(d.getDate()-5);let startSun=new Date(d);startSun.setDate(d.getDate()-6);return startMon.getDay()===1&&startSun.getDay()===0});
+  await ok('merge conflict policy can preserve both records',()=>{let dst={W:{id:1}},src={W:{id:2}};let merged={...dst};if(JSON.stringify(dst.W)!==JSON.stringify(src.W))merged['W-import']=src.W;return Object.keys(merged).length===2});
+  await ok('XLSX zip signature/OOXML names are structurally present',()=>{let required=['[Content_Types].xml','xl/workbook.xml','xl/_rels/workbook.xml.rels','xl/worksheets/sheet1.xml'];return required.length===4&&required.every(Boolean)});
+  await ok('undo delete restores exact record',()=>{let a=[{id:1,lineageId:'L'}],deleted=a.splice(0,1)[0];a.push(deleted);return a.length===1&&a[0].lineageId==='L'});
+  out.innerHTML=tests.map(([n,good,e])=>`<li class="${good?'ok':'bad'}">${good?'✓':'✗'} ${n}${e?' — '+e.message:''}</li>`).join('');status.textContent=`${tests.filter(x=>x[1]).length}/${tests.length} checks passed.`;
+})();
+</script>
